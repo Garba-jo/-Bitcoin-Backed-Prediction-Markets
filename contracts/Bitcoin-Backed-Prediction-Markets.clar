@@ -3,11 +3,15 @@
 (define-constant ERR-INVALID-AMOUNT (err u102))
 (define-constant ERR-NO-STAKE (err u103))
 (define-constant ERR-ALREADY-SETTLED (err u104))
+(define-constant ERR-INVALID-FEE (err u105))
 
 (define-data-var oracle-address principal tx-sender)
 (define-data-var min-stake uint u100)
 (define-data-var market-status bool true)
 (define-data-var next-market-id uint u1)
+(define-data-var protocol-fee-bps uint u250)
+(define-data-var protocol-admin principal tx-sender)
+(define-data-var total-fees-collected uint u0)
 
 (define-map markets
     uint 
@@ -50,17 +54,20 @@
         (current-stake (default-to 
             { yes-amount: u0, no-amount: u0, claimed: false }
             (map-get? user-stakes { market-id: market-id, user: tx-sender })))
+        (fee-amount (/ (* amount (var-get protocol-fee-bps)) u10000))
+        (net-amount (- amount fee-amount))
     )
         (asserts! (>= amount (var-get min-stake)) ERR-INVALID-AMOUNT)
         (asserts! (not (get settled market)) ERR-MARKET-CLOSED)
         (asserts! (<= burn-block-height (get end-block market)) ERR-MARKET-CLOSED)
         (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+        (var-set total-fees-collected (+ (var-get total-fees-collected) fee-amount))
         (map-set markets market-id
-            (merge market { total-yes-amount: (+ (get total-yes-amount market) amount) })
+            (merge market { total-yes-amount: (+ (get total-yes-amount market) net-amount) })
         )
         (map-set user-stakes 
             { market-id: market-id, user: tx-sender }
-            { yes-amount: (+ (get yes-amount current-stake) amount), no-amount: (get no-amount current-stake), claimed: (get claimed current-stake) }
+            { yes-amount: (+ (get yes-amount current-stake) net-amount), no-amount: (get no-amount current-stake), claimed: (get claimed current-stake) }
         )
         (ok true)
     )
@@ -72,17 +79,20 @@
         (current-stake (default-to 
             { yes-amount: u0, no-amount: u0, claimed: false }
             (map-get? user-stakes { market-id: market-id, user: tx-sender })))
+        (fee-amount (/ (* amount (var-get protocol-fee-bps)) u10000))
+        (net-amount (- amount fee-amount))
     )
         (asserts! (>= amount (var-get min-stake)) ERR-INVALID-AMOUNT)
         (asserts! (not (get settled market)) ERR-MARKET-CLOSED)
         (asserts! (<= burn-block-height (get end-block market)) ERR-MARKET-CLOSED)
         (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+        (var-set total-fees-collected (+ (var-get total-fees-collected) fee-amount))
         (map-set markets market-id
-            (merge market { total-no-amount: (+ (get total-no-amount market) amount) })
+            (merge market { total-no-amount: (+ (get total-no-amount market) net-amount) })
         )
         (map-set user-stakes 
             { market-id: market-id, user: tx-sender }
-            { yes-amount: (get yes-amount current-stake), no-amount: (+ (get no-amount current-stake) amount), claimed: (get claimed current-stake) }
+            { yes-amount: (get yes-amount current-stake), no-amount: (+ (get no-amount current-stake) net-amount), claimed: (get claimed current-stake) }
         )
         (ok true)
     )
@@ -136,4 +146,39 @@
 
 (define-read-only (get-user-stake (market-id uint) (user principal))
     (map-get? user-stakes { market-id: market-id, user: user })
+)
+
+(define-public (set-protocol-fee (new-fee-bps uint))
+    (begin
+        (asserts! (is-eq tx-sender (var-get protocol-admin)) ERR-NOT-AUTHORIZED)
+        (asserts! (<= new-fee-bps u1000) ERR-INVALID-FEE)
+        (var-set protocol-fee-bps new-fee-bps)
+        (ok true)
+    )
+)
+
+(define-public (withdraw-protocol-fees (amount uint))
+    (begin
+        (asserts! (is-eq tx-sender (var-get protocol-admin)) ERR-NOT-AUTHORIZED)
+        (asserts! (<= amount (var-get total-fees-collected)) ERR-INVALID-AMOUNT)
+        (try! (as-contract (stx-transfer? amount (as-contract tx-sender) (var-get protocol-admin))))
+        (var-set total-fees-collected (- (var-get total-fees-collected) amount))
+        (ok amount)
+    )
+)
+
+(define-public (transfer-admin (new-admin principal))
+    (begin
+        (asserts! (is-eq tx-sender (var-get protocol-admin)) ERR-NOT-AUTHORIZED)
+        (var-set protocol-admin new-admin)
+        (ok true)
+    )
+)
+
+(define-read-only (get-protocol-info)
+    {
+        fee-bps: (var-get protocol-fee-bps),
+        admin: (var-get protocol-admin),
+        total-fees: (var-get total-fees-collected)
+    }
 )
