@@ -4,6 +4,7 @@
 (define-constant ERR-NO-STAKE (err u103))
 (define-constant ERR-ALREADY-SETTLED (err u104))
 (define-constant ERR-INVALID-FEE (err u105))
+(define-constant ERR-PAUSED (err u106))
 
 (define-data-var oracle-address principal tx-sender)
 (define-data-var min-stake uint u100)
@@ -12,6 +13,7 @@
 (define-data-var protocol-fee-bps uint u250)
 (define-data-var protocol-admin principal tx-sender)
 (define-data-var total-fees-collected uint u0)
+(define-data-var protocol-paused bool false)
 
 (define-map markets
     uint 
@@ -58,6 +60,7 @@
         (net-amount (- amount fee-amount))
     )
         (asserts! (>= amount (var-get min-stake)) ERR-INVALID-AMOUNT)
+        (asserts! (not (var-get protocol-paused)) ERR-PAUSED)
         (asserts! (not (get settled market)) ERR-MARKET-CLOSED)
         (asserts! (<= burn-block-height (get end-block market)) ERR-MARKET-CLOSED)
         (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
@@ -83,6 +86,7 @@
         (net-amount (- amount fee-amount))
     )
         (asserts! (>= amount (var-get min-stake)) ERR-INVALID-AMOUNT)
+        (asserts! (not (var-get protocol-paused)) ERR-PAUSED)
         (asserts! (not (get settled market)) ERR-MARKET-CLOSED)
         (asserts! (<= burn-block-height (get end-block market)) ERR-MARKET-CLOSED)
         (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
@@ -117,6 +121,7 @@
         (total-pool (+ (get total-yes-amount market) (get total-no-amount market)))
     )
         (asserts! (get settled market) ERR-MARKET-CLOSED)
+        (asserts! (not (var-get protocol-paused)) ERR-PAUSED)
         (asserts! (not (get claimed stake)) ERR-ALREADY-SETTLED)
         (asserts! (> total-pool u0) ERR-NO-STAKE)
         
@@ -171,6 +176,22 @@
     (begin
         (asserts! (is-eq tx-sender (var-get protocol-admin)) ERR-NOT-AUTHORIZED)
         (var-set protocol-admin new-admin)
+        (ok true)
+    )
+)
+
+(define-public (pause-protocol)
+    (begin
+        (asserts! (is-eq tx-sender (var-get protocol-admin)) ERR-NOT-AUTHORIZED)
+        (var-set protocol-paused true)
+        (ok true)
+    )
+)
+
+(define-public (unpause-protocol)
+    (begin
+        (asserts! (is-eq tx-sender (var-get protocol-admin)) ERR-NOT-AUTHORIZED)
+        (var-set protocol-paused false)
         (ok true)
     )
 )
