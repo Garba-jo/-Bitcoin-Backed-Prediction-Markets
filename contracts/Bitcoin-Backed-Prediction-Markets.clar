@@ -14,6 +14,7 @@
 (define-data-var protocol-admin principal tx-sender)
 (define-data-var total-fees-collected uint u0)
 (define-data-var protocol-paused bool false)
+(define-data-var early-withdrawal-penalty-bps uint u500)
 
 (define-map markets
     uint 
@@ -193,6 +194,56 @@
         (asserts! (is-eq tx-sender (var-get protocol-admin)) ERR-NOT-AUTHORIZED)
         (var-set protocol-paused false)
         (ok true)
+    )
+)
+
+(define-public (withdraw-early-yes (market-id uint))
+    (let (
+        (market (unwrap! (map-get? markets market-id) ERR-MARKET-CLOSED))
+        (stake (unwrap! (map-get? user-stakes { market-id: market-id, user: tx-sender }) ERR-NO-STAKE))
+        (yes-amount (get yes-amount stake))
+        (penalty (/ (* yes-amount (var-get early-withdrawal-penalty-bps)) u10000))
+        (refund (- yes-amount penalty))
+    )
+        (asserts! (not (get settled market)) ERR-MARKET-CLOSED)
+        (asserts! (<= burn-block-height (get end-block market)) ERR-MARKET-CLOSED)
+        (asserts! (> yes-amount u0) ERR-NO-STAKE)
+        (asserts! (not (var-get protocol-paused)) ERR-PAUSED)
+        (try! (as-contract (stx-transfer? refund (as-contract tx-sender) tx-sender)))
+        (var-set total-fees-collected (+ (var-get total-fees-collected) penalty))
+        (map-set markets market-id
+            (merge market { total-yes-amount: (- (get total-yes-amount market) yes-amount) })
+        )
+        (map-set user-stakes
+            { market-id: market-id, user: tx-sender }
+            { yes-amount: u0, no-amount: (get no-amount stake), claimed: (get claimed stake) }
+        )
+        (ok refund)
+    )
+)
+
+(define-public (withdraw-early-no (market-id uint))
+    (let (
+        (market (unwrap! (map-get? markets market-id) ERR-MARKET-CLOSED))
+        (stake (unwrap! (map-get? user-stakes { market-id: market-id, user: tx-sender }) ERR-NO-STAKE))
+        (no-amount (get no-amount stake))
+        (penalty (/ (* no-amount (var-get early-withdrawal-penalty-bps)) u10000))
+        (refund (- no-amount penalty))
+    )
+        (asserts! (not (get settled market)) ERR-MARKET-CLOSED)
+        (asserts! (<= burn-block-height (get end-block market)) ERR-MARKET-CLOSED)
+        (asserts! (> no-amount u0) ERR-NO-STAKE)
+        (asserts! (not (var-get protocol-paused)) ERR-PAUSED)
+        (try! (as-contract (stx-transfer? refund (as-contract tx-sender) tx-sender)))
+        (var-set total-fees-collected (+ (var-get total-fees-collected) penalty))
+        (map-set markets market-id
+            (merge market { total-no-amount: (- (get total-no-amount market) no-amount) })
+        )
+        (map-set user-stakes
+            { market-id: market-id, user: tx-sender }
+            { yes-amount: (get yes-amount stake), no-amount: u0, claimed: (get claimed stake) }
+        )
+        (ok refund)
     )
 )
 
